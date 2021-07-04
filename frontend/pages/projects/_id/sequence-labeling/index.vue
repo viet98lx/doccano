@@ -11,17 +11,36 @@
         class="d-none d-sm-block"
         @click:clear-label="clear"
         @click:review="confirm"
-      />
+      >
+        <button-label-switch
+          class="ms-2"
+          @change="labelComponent=$event"
+        />
+      </toolbar-laptop>
       <toolbar-mobile
         :total="docs.count"
         class="d-flex d-sm-none"
       />
     </template>
     <template v-slot:content>
-      <v-card>
+      <v-card
+          v-shortkey="shortKeys"
+        @shortkey="annotateOrRemoveLabel(project.id, doc.id, $event.srcKey)">
+
+        <v-card-title>
+          <component
+            :is="labelComponent"
+            :labels="classification_labels"
+            :annotations="annotations_intent"
+            :single-label="project.singleClassClassification"
+            @add="add_intent_label($event)"
+            @remove="remove_intent_label($event)"
+          />
+        </v-card-title>
+        <v-divider />
         <v-card-text class="title">
           <entity-item-box
-            :labels="labels"
+            :labels="ner_labels"
             :link-types="linkTypes"
             :text="doc.text"
             :entities="annotations"
@@ -48,6 +67,16 @@
 <script>
 import _ from 'lodash'
 import {mapGetters} from 'vuex'
+
+import { toRefs, useContext, useFetch, ref, watch } from '@nuxtjs/composition-api'
+import LabelGroup from '@/components/tasks/textClassification/LabelGroup'
+import LabelSelect from '@/components/tasks/textClassification/LabelSelect'
+import ButtonLabelSwitch from '@/components/tasks/toolbar/buttons/ButtonLabelSwitch'
+import { useExampleItem } from '@/composables/useExampleItem'
+import { useLabelList } from '@/composables/useLabelList'
+import { useProjectItem } from '@/composables/useProjectItem'
+import { useTeacherList } from '@/composables/useTeacherList'
+
 import LayoutText from '@/components/tasks/layout/LayoutText'
 import ListMetadata from '@/components/tasks/metadata/ListMetadata'
 import ToolbarLaptop from '@/components/tasks/toolbar/ToolbarLaptop'
@@ -63,11 +92,22 @@ export default {
   layout: 'workspace',
 
   components: {
+    ButtonLabelSwitch,
+    LabelGroup,
+    LabelSelect,
+
     EntityItemBox,
     LayoutText,
     ListMetadata,
     ToolbarLaptop,
     ToolbarMobile
+  },
+
+  setup() {
+    const labelComponent = ref('label-group')
+    return {
+      labelComponent
+    }
   },
 
   async fetch() {
@@ -87,8 +127,11 @@ export default {
   data() {
     return {
       annotations: [],
+      annotations_intent: [], //  list annotations for intent classification
       docs: [],
       labels: [],
+      ner_labels: [],
+      classification_labels: [],
       links: [],
       linkTypes: [],
       project: {},
@@ -128,6 +171,13 @@ export default {
 
   async created() {
     this.labels = await this.$services.label.list(this.projectId)
+    // console.log(this.labels)
+
+    this.ner_labels = this.labels.filter((v, i, a) => {return v.text.includes("task3_")})
+    // console.log(this.ner_labels)
+
+    this.classification_labels = this.labels.filter((v, i, a) => {return !v.text.includes("task3_")})
+    // console.log(this.classification_labels)
 
     this.linkTypes = await this.$services.linkTypes.list(this.projectId)
 
@@ -137,16 +187,25 @@ export default {
   methods: {
     async list(docId) {
       this.hideAllLinkMenus();
-
       const annotations = await this.$services.sequenceLabeling.list(this.projectId, docId);
       const links = await this.$services.sequenceLabeling.listLinks(this.projectId);
+      this.annotations_intent = annotations.filter((v, i, a) => {return v.startOffset === -1})
+      const seq_labeling_annotations = annotations.filter((v, i, a) => {return !(v.startOffset === -1)})
+      console.log(annotations)
+      console.log(seq_labeling_annotations)
 
-      annotations.forEach(function(annotation) {
+      seq_labeling_annotations.forEach(function(annotation) {
         annotation.links = links.filter(link => link.annotation_id_1 === annotation.id);
       });
 
-      this.annotations = annotations;
+      this.annotations = seq_labeling_annotations;
       this.links = links;
+    },
+
+    async list_classification(docId){
+      this.hideAllLinkMenus();
+      const annotations = await this.$services.sequenceLabeling.list(this.projectId, docId);
+      this.annotations_intent = annotations.filter((v, i, a) => {return v.startOffset === -1})
     },
 
     populateLinks() {
@@ -163,6 +222,7 @@ export default {
     },
 
     async add(startOffset, endOffset, labelId) {
+      // console.log("da goi vao add")
       this.hideAllLinkMenus();
       await this.$services.sequenceLabeling.create(this.projectId, this.doc.id, labelId, startOffset, endOffset)
       await this.list(this.doc.id)
@@ -172,6 +232,23 @@ export default {
       this.hideAllLinkMenus();
       await this.$services.sequenceLabeling.changeLabel(this.projectId, this.doc.id, annotationId, labelId)
       await this.list(this.doc.id)
+    },
+
+    //  function for add intent label (similar to annotateLabel in useTeacherList)
+    async add_intent_label(labelId){
+      // console.log("goi vao add intent label")
+      // await this.$services.sequenceLabeling.classification_create(this.projectId, this.doc.id, labelId)
+      await this.$services.sequenceLabeling.create(this.projectId, this.doc.id, labelId, -1, -1)
+      await this.list_classification(this.doc.id)
+      // await this.list_intent(this.doc.id)
+    },
+
+    //  function for remove intent label (similar to removeTeacher in useTeacherList)
+    async remove_intent_label(id){
+      // console.log("da goi vao remove")
+      // await this.$services.sequenceLabeling.classification_delete(this.projectId, this.doc.id, id)
+      await this.$services.sequenceLabeling.delete(this.projectId, this.doc.id, id)
+      await this.list_classification(this.doc.id)
     },
 
     async clear() {
@@ -223,6 +300,8 @@ export default {
   },
 
   validate({ params, query }) {
+    console.log(params)
+    console.log(query)
     return /^\d+$/.test(params.id) && /^\d+$/.test(query.page)
   }
 }
